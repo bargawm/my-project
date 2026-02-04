@@ -6,244 +6,168 @@
 
 import os
 import sys
+import json
 import shutil
 import argparse
-import threading
-import time
-import getpass
-import json
 from pathlib import Path
-from typing import List
+from typing import List, Dict, Any, Optional
+import requests
+from dotenv import load_dotenv
+from colorama import init, Fore, Style
 
-# --- Dependency Handling ---
-try:
-    import requests
-except ImportError:
-    print("\n[CRITICAL] Missing 'requests' library.")
-    print("Please run: pip install requests\n")
-    sys.exit(1)
+# Initialize colorama for Windows terminal support
+init(autoreset=True)
 
-try:
-    import colorama
-    from colorama import Fore, Style
-    colorama.init(autoreset=True)
-    HAS_COLOR = True
-except ImportError:
-    HAS_COLOR = False
-    class Fore:
-        CYAN = GREEN = RED = MAGENTA = YELLOW = BLUE = WHITE = ""
-    class Style:
-        RESET_ALL = BRIGHT = DIM = ""
+# Load context from .env
+load_dotenv()
 
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass  # Optional dependency
+class FileSystemTools:
+    """Standardized Python tools for file operations."""
 
-# --- UI Components ---
-
-class Spinner:
-    """Shows a rotating spinner in the console during long operations."""
-    def __init__(self, message: str = "Processing"):
-        self.message = message
-        self.stop_event = threading.Event()
-        self.thread = threading.Thread(target=self._spin)
-
-    def start(self):
-        self.stop_event.clear()
-        self.thread.start()
-
-    def stop(self):
-        self.stop_event.set()
-        self.thread.join()
-        sys.stdout.write(f"\r{' ' * (len(self.message) + 10)}\r") # Clear line
-        sys.stdout.flush()
-
-    def _spin(self):
-        chars = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-        i = 0
-        while not self.stop_event.is_set():
-            frame = chars[i % len(chars)]
-            sys.stdout.write(f"\r{Fore.CYAN}{frame} {self.message}...{Style.RESET_ALL}")
-            sys.stdout.flush()
-            time.sleep(0.1)
-            i += 1
-
-def print_banner():
-    banner = f"""
-{Fore.CYAN}{Style.BRIGHT}
-    ╔═══════════════════════════════════════════════╗
-    ║          🤖 AI FILE SYSTEM ROBOT              ║
-    ║       Intelligent Automation Assistant        ║
-    ╚═══════════════════════════════════════════════╝
-{Style.RESET_ALL}"""
-    print(banner)
-
-def print_success(msg: str):
-    print(f"{Fore.GREEN}✔ {msg}{Style.RESET_ALL}")
-
-def print_error(msg: str):
-    print(f"{Fore.RED}✖ {msg}{Style.RESET_ALL}")
-
-def print_info(msg: str):
-    print(f"{Fore.BLUE}ℹ {msg}{Style.RESET_ALL}")
-
-# --- Core Logic ---
-
-class FileSystemEngine:
     @staticmethod
     def find_files(pattern: str, root_path: str = ".", recursive: bool = True) -> List[str]:
-        print_info(f"Searching for '{pattern}' in {root_path}")
-        root = Path(root_path)
-        if not root.exists():
-            print_error("Path does not exist.")
-            return []
-        
-        glob_func = root.rglob if recursive else root.glob
-        files = []
+        """Search for files matching a pattern."""
+        print(f"{Fore.CYAN}Searching for '{pattern}' in '{root_path}'...")
+        found = []
         try:
-            files = [str(p.absolute()) for p in glob_func(pattern) if p.is_file()]
-            print_success(f"Found {len(files)} file(s).")
-        except Exception as e:
-            print_error(f"Search failed: {e}")
+            root = Path(root_path)
+            if not root.exists():
+                print(f"{Fore.RED}[Error] Path not found: {root_path}")
+                return []
             
-        return files
+            glob_func = root.rglob if recursive else root.glob
+            for p in glob_func(pattern):
+                if p.is_file():
+                    found.append(str(p.absolute()))
+            
+            print(f"{Fore.GREEN}Found {len(found)} file(s).")
+        except Exception as e:
+            print(f"{Fore.RED}[Error] Search failed: {e}")
+        return found
 
     @staticmethod
     def move_files(file_paths: List[str], destination: str):
-        dest = Path(destination)
-        try:
-            dest.mkdir(parents=True, exist_ok=True)
-            print_info(f"Moving files to {dest}")
-        except Exception as e:
-            print_error(f"Could not create destination: {e}")
-            return
-
+        """Move a list of files to a destination folder."""
+        print(f"{Fore.CYAN}Moving {len(file_paths)} files to '{destination}'...")
+        dest_path = Path(destination)
+        dest_path.mkdir(parents=True, exist_ok=True)
         success_count = 0
-        for f in file_paths:
-            try:
-                # Handle filename collisions by renaming if necessary could be added here
-                # For now, simple move
-                shutil.move(f, dest / Path(f).name)
-                print(f"  {Fore.GREEN}→ Moved: {Path(f).name}{Style.RESET_ALL}")
-                success_count += 1
-            except Exception as e:
-                print(f"  {Fore.RED}→ Failed: {Path(f).name} ({e}){Style.RESET_ALL}")
         
-        if success_count > 0:
-            print_success(f"Operation completed. Moved {success_count} files.")
-
-class AIRobot:
-    def __init__(self):
-        self.api_key = self._get_api_key()
-        self.model = "mistralai/mixtral-8x7b-instruct"
-        self.api_url = "https://openrouter.ai/api/v1/chat/completions"
-
-    def _get_api_key(self) -> str:
-        key = os.getenv("OPENROUTER_API_KEY")
-        if not key:
-            print(f"\n{Fore.YELLOW}[SETUP] API Key not found in environment.{Style.RESET_ALL}")
-            print(f"You can get a key at: https://openrouter.ai/keys")
+        for path_str in file_paths:
             try:
-                while not key:
-                    key = getpass.getpass(f"{Fore.MAGENTA}Enter OpenRouter API Key (hidden): {Style.RESET_ALL}").strip()
-            except KeyboardInterrupt:
-                print("\n")
-                sys.exit(0)
-        return key
+                src = Path(path_str)
+                if src.exists():
+                    dst = dest_path / src.name
+                    shutil.move(str(src), str(dst))
+                    print(f"{Fore.GREEN}Moved: {src.name}")
+                    success_count += 1
+            except Exception as e:
+                print(f"{Fore.RED}[Error] Could not move {path_str}: {e}")
+        
+        print(f"{Fore.YELLOW}Operation complete: {success_count}/{len(file_paths)} moved.")
 
-    def get_code_from_ai(self, prompt: str) -> str:
+
+class GeminiRobot:
+    """The main CLI Robot agent."""
+
+    def _init_(self):
+        self.api_key = os.getenv("OPENROUTER_API_KEY")
+        self.model = os.getenv("LLM_MODEL", "stepfun/step-3.5-flash:free")
+        self.site_url = os.getenv("site_url", "https://github.com/Unknownuser1000989/gemini-robot-cli")
+        self.site_name = os.getenv("site_name", "Gemini Robot CLI")
+
+        if not self.api_key or self.api_key == "your_api_key_here":
+            print(f"{Fore.RED}[Error] Missing OPENROUTER_API_KEY in .env file.")
+            sys.exit(1)
+
+    def _get_code_from_ai(self, user_prompt: str) -> Optional[str]:
+        url = "https://openrouter.ai/api/v1/chat/completions"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            "HTTP-Referer": self.site_url,
+            "X-Title": self.site_name
         }
-        
-        system_prompt = (
-            "You are a Python code generator for file system operations. "
-            "Your available tool is a class `FileSystemEngine` with methods:\n"
-            "1. `find_files(pattern: str, root_path: str = '.', recursive: bool = True) -> List[str]`\n"
-            "2. `move_files(file_paths: List[str], destination: str)`\n"
-            "Return ONLY valid Python code. No markdown formatting (no ```python blocks). "
-            "Do not import anything. Assume FileSystemEngine is available."
-        )
+
+        system_msg = """
+        You are a File System Assistant. You respond ONLY with Python code to solve the user's request.
+        You must use the provided FileSystemTools class.
+
+        AVAILABLE TOOLS:
+        1. FileSystemTools.find_files(pattern, root_path=".", recursive=True) -> returns list of strings (paths)
+        2. FileSystemTools.move_files(file_paths, destination) -> moves files
+
+        RULES:
+        - Return ONLY the Python code block.
+        - Use FileSystemTools methods.
+        - No 'if _name_ == "_main_":' blocks.
+        - Use forward slashes (/) for all paths.
+        - Wrap code in python ...  tags.
+        """
 
         payload = {
             "model": self.model,
             "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt}
-            ],
-            "temperature": 0.1
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": user_prompt}
+            ]
         }
 
         try:
-            response = requests.post(self.api_url, headers=headers, json=payload, timeout=30)
-            response.raise_for_status()
-            data = response.json()
+            resp = requests.post(url, headers=headers, json=payload)
+            if resp.status_code != 200:
+                print(f"{Fore.RED}[Error] API Request failed: {resp.status_code}")
+                print(f"{Fore.RED}Response text: {resp.text}")
+                return None
             
-            if "error" in data:
-                raise ValueError(f"API Error: {data['error'].get('message', 'Unknown error')}")
-                
-            content = data["choices"][0]["message"]["content"]
-            # cleanup potential markdown if the model hallucinates
-            clean_code = content.replace("```python", "").replace("```", "").strip()
-            return clean_code
+            content = resp.json()["choices"][0]["message"]["content"]
+            if "python" in content:
+                return content.split("python")[1].split("```")[0].strip()
+            return content.strip()
             
-        except requests.exceptions.RequestException as e:
-            raise ConnectionError(f"Network error connecting to AI: {e}")
         except Exception as e:
-            raise RuntimeError(f"AI processing failed: {e}")
+            print(f"{Fore.RED}[Error] API Request failed: {e}")
+            return None
 
-    def execute(self, prompt: str):
-        spinner = Spinner("Thinking")
-        try:
-            spinner.start()
-            code = self.get_code_from_ai(prompt)
-        except Exception as e:
-            spinner.stop()
-            print_error(str(e))
+    def execute_command(self, user_prompt: str):
+        print(f"{Fore.CYAN}Processing: {user_prompt}")
+        code = self._get_code_from_ai(user_prompt)
+
+        if not code:
             return
-        finally:
-            spinner.stop()
 
-        print(f"\n{Fore.YELLOW}📋 EXECUTION PLAN:{Style.RESET_ALL}")
-        print(f"{Fore.CYAN}{'-'*40}{Style.RESET_ALL}")
-        print(f"{Style.BRIGHT}{code}{Style.RESET_ALL}")
-        print(f"{Fore.CYAN}{'-'*40}{Style.RESET_ALL}\n")
+        print(f"\n{Fore.GREEN}--- PROPOSED PLAN ---{Style.RESET_ALL}")
+        print(code)
+        print(f"{Fore.GREEN}--------------------{Style.RESET_ALL}\n")
 
-        try:
-            # Safer input loop
-            confirm = input(f"{Fore.MAGENTA}Execute this plan? (y/N): {Style.RESET_ALL}").lower()
-            if confirm == "y":
-                print("")
-                exec(code, {"FileSystemEngine": FileSystemEngine, "print": print})
-            else:
-                print_info("Operation cancelled.")
-        except KeyboardInterrupt:
-            print("\n")
-            print_info("Operation cancelled.")
-        except Exception as e:
-            print_error(f"Execution error: {e}")
+        confirm = input(f"{Fore.YELLOW}Execute this plan? (y/N): ").strip().lower()
+        if confirm == 'y':
+            try:
+                # Provide tools and helpers to the execution environment
+                context = {
+                    "FileSystemTools": FileSystemTools,
+                    "os": os,
+                    "shutil": shutil,
+                    "Path": Path,
+                    "print": print
+                }
+                exec(code, context)
+                print(f"{Fore.GREEN}All tasks finished.")
+            except Exception as e:
+                print(f"{Fore.RED}[Error] Execution failed: {e}")
+        else:
+            print(f"{Fore.RED}Execution cancelled by user.")
 
 def main():
-    print_banner()
-    
-    parser = argparse.ArgumentParser(description="AI File System Robot")
+    parser = argparse.ArgumentParser(description="Gemini Robot CLI - Restarted Version")
     parser.add_argument("prompt", nargs="?", help="Natural language command")
     args = parser.parse_args()
 
-    if not args.prompt:
-        print(f"{Fore.YELLOW}Usage: python robot.py \"<your command>\"{Style.RESET_ALL}")
-        print("Example: python robot.py \"Move all jpg files to the Images folder\"")
-        return
+    robot = GeminiRobot()
+    if args.prompt:
+        robot.execute_command(args.prompt)
+    else:
+        print(f"{Fore.YELLOW}Usage: python robot.py \"Your command here\"")
 
-    try:
-        bot = AIRobot()
-        bot.execute(args.prompt)
-    except KeyboardInterrupt:
-        print("\nGood bye!")
-        sys.exit(0)
-
-if __name__ == "__main__":
+if _name_ == "_main_":
     main()
